@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import os
+import subprocess
 import time
 import urllib.request
 import webbrowser
@@ -19,6 +21,12 @@ DRAW_COLOR = (255, 255, 255)
 ERASE_RADIUS = 28
 WINDOW_NAME = "AirForge"
 HAND_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+WINDOWS_BROWSERS = [
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+]
 
 
 def main() -> None:
@@ -137,8 +145,21 @@ def generate_from_canvas(canvas: np.ndarray, output_dir: Path, export: str):
     sketch_path = output_dir / "sketch.png"
     cv2.imwrite(str(sketch_path), canvas)
     files = generate_page(layout, output_dir, export, sketch_path)
-    webbrowser.open(files.html_path.as_uri())
+    open_preview(files.html_path)
     return files
+
+
+def open_preview(html_path: Path) -> None:
+    html_path = html_path.resolve()
+    if os.name == "nt":
+        for browser in WINDOWS_BROWSERS:
+            if Path(browser).exists():
+                subprocess.Popen([browser, html_path.as_uri()])
+                return
+        os.startfile(str(html_path))
+        return
+
+    webbrowser.open_new_tab(html_path.as_uri())
 
 
 def _apply_gesture(
