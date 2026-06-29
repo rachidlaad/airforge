@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import queue
 import subprocess
+import threading
 import time
 import urllib.request
 import webbrowser
@@ -27,6 +29,13 @@ WINDOWS_BROWSERS = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
 ]
+
+
+@dataclass
+class GenerationJob:
+    running: bool
+    started_at: float
+    messages: "queue.Queue[tuple[str, str]]"
 
 
 def main() -> None:
@@ -81,6 +90,7 @@ def run_webcam(output_dir: Path, export: str, camera_index: int) -> None:
     last_generate_time = 0.0
     last_clear_time = 0.0
     last_status = "Show your index finger to draw."
+    generation_job = GenerationJob(False, 0.0, queue.Queue())
 
     output_dir.mkdir(parents=True, exist_ok=True)
     cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
@@ -108,10 +118,13 @@ def run_webcam(output_dir: Path, export: str, camera_index: int) -> None:
                     export,
                     last_generate_time,
                     last_clear_time,
+                    generation_job,
                 )
             else:
                 previous_point = None
                 last_status = "No hand detected."
+
+            last_status = _consume_generation_messages(generation_job, last_status, output_dir)
 
             preview = _compose_preview(frame, canvas, gesture, last_status)
             cv2.imshow(WINDOW_NAME, preview)
@@ -123,12 +136,9 @@ def run_webcam(output_dir: Path, export: str, camera_index: int) -> None:
                 previous_point = None
                 last_status = "Canvas cleared."
             if key == ord("g"):
-                try:
-                    generate_from_canvas(canvas, output_dir, export)
-                    last_status = f"Generated {output_dir / 'index.html'}"
-                except GenerationError as exc:
-                    _print_generation_error(exc, output_dir)
-                    last_status = _short_error(exc)
+                last_status = start_generation_job(canvas, output_dir, export, generation_job)
+                if generation_job.running:
+                    last_generate_time = time.monotonic()
             if key == ord("s"):
                 cv2.imwrite(str(output_dir / "sketch.png"), canvas)
                 last_status = f"Saved {output_dir / 'sketch.png'}"
@@ -170,6 +180,7 @@ def _apply_gesture(
     export: str,
     last_generate_time: float,
     last_clear_time: float,
+    generation_job: GenerationJob,
 ) -> tuple[tuple[int, int] | None, str, float, float]:
     now = time.monotonic()
     status = f"Gesture: {gesture.name}"
@@ -195,18 +206,57 @@ def _apply_gesture(
 
     if gesture.name == "generate":
         if now - last_generate_time > 2.5:
-            try:
-                generate_from_canvas(canvas, output_dir, export)
-                last_generate_time = now
-                status = f"Generated {output_dir / 'index.html'}"
-            except GenerationError as exc:
-                _print_generation_error(exc, output_dir)
-                status = _short_error(exc)
+            status = start_generation_job(canvas, output_dir, export, generation_job)
+            last_generate_time = now
         else:
             status = "Generation cooling down."
         return None, status, last_generate_time, last_clear_time
 
     return None, status, last_generate_time, last_clear_time
+
+
+def start_generation_job(canvas: np.ndarray, output_dir: Path, export: str, job: GenerationJob) -> str:
+    if job.running:
+        return "Generation already running..."
+
+    job.running = True
+    job.started_at = time.monotonic()
+    snapshot = canvas.copy()
+    worker = threading.Thread(
+        target=_run_generation_job,
+        args=(snapshot, output_dir, export, job),
+        daemon=True,
+    )
+    worker.start()
+    return "Generating page with Codex..."
+
+
+def _run_generation_job(canvas: np.ndarray, output_dir: Path, export: str, job: GenerationJob) -> None:
+    try:
+        files = generate_from_canvas(canvas, output_dir, export)
+        job.messages.put(("success", f"Generated {files.html_path}"))
+    except GenerationError as exc:
+        job.messages.put(("error", str(exc)))
+    except Exception as exc:
+        job.messages.put(("error", f"Unexpected generation error: {exc}"))
+
+
+def _consume_generation_messages(job: GenerationJob, current_status: str, output_dir: Path) -> str:
+    try:
+        kind, message = job.messages.get_nowait()
+    except queue.Empty:
+        if job.running:
+            elapsed = int(time.monotonic() - job.started_at)
+            return f"Generating page with Codex... {elapsed}s"
+        return current_status
+
+    job.running = False
+    if kind == "success":
+        return message
+
+    error = GenerationError(message)
+    _print_generation_error(error, output_dir)
+    return _short_error(error)
 
 
 def _compose_preview(frame: np.ndarray, canvas: np.ndarray, gesture: GestureState, status: str) -> np.ndarray:
