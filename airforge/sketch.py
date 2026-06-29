@@ -135,9 +135,6 @@ def interpret_layout(shapes: Iterable[Shape], width: int, height: int) -> Layout
         role = _classify_remaining(shape, width, height)
         blocks.append(_block(role, shape))
 
-    if not blocks:
-        blocks = _fallback_blocks(width, height)
-
     return Layout(width=width, height=height, blocks=sorted(blocks, key=lambda block: (block.y, block.x)))
 
 
@@ -216,13 +213,3 @@ def _classify_remaining(shape: Shape, width: int, height: int) -> str:
 
 def _block(role: str, shape: Shape) -> UIBlock:
     return UIBlock(role=role, x=shape.x, y=shape.y, w=shape.w, h=shape.h)
-
-
-def _fallback_blocks(width: int, height: int) -> List[UIBlock]:
-    return [
-        UIBlock("navbar", int(width * 0.08), int(height * 0.08), int(width * 0.84), int(height * 0.10)),
-        UIBlock("hero", int(width * 0.08), int(height * 0.24), int(width * 0.84), int(height * 0.26)),
-        UIBlock("card", int(width * 0.08), int(height * 0.60), int(width * 0.25), int(height * 0.22)),
-        UIBlock("card", int(width * 0.375), int(height * 0.60), int(width * 0.25), int(height * 0.22)),
-        UIBlock("card", int(width * 0.67), int(height * 0.60), int(width * 0.25), int(height * 0.22)),
-    ]

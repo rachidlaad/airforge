@@ -8,7 +8,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .generator import generate_page
+from .generator import GenerationError, generate_page
 from .gestures import GestureState, HandGestureDetector
 from .sketch import detect_shapes, interpret_layout, sample_canvas
 
@@ -120,8 +120,11 @@ def run_webcam(output_dir: Path, export: str, camera_index: int) -> None:
                 previous_point = None
                 last_status = "Canvas cleared."
             if key == ord("g"):
-                generate_from_canvas(canvas, output_dir, export)
-                last_status = f"Generated {output_dir / 'index.html'}"
+                try:
+                    generate_from_canvas(canvas, output_dir, export)
+                    last_status = f"Generated {output_dir / 'index.html'}"
+                except GenerationError as exc:
+                    last_status = _short_error(exc)
             if key == ord("s"):
                 cv2.imwrite(str(output_dir / "sketch.png"), canvas)
                 last_status = f"Saved {output_dir / 'sketch.png'}"
@@ -134,8 +137,10 @@ def run_webcam(output_dir: Path, export: str, camera_index: int) -> None:
 def generate_from_canvas(canvas: np.ndarray, output_dir: Path, export: str):
     shapes = detect_shapes(canvas)
     layout = interpret_layout(shapes, canvas.shape[1], canvas.shape[0])
-    files = generate_page(layout, output_dir, export)
-    cv2.imwrite(str(output_dir / "sketch.png"), canvas)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    sketch_path = output_dir / "sketch.png"
+    cv2.imwrite(str(sketch_path), canvas)
+    files = generate_page(layout, output_dir, export, sketch_path)
     webbrowser.open(files.html_path.as_uri())
     return files
 
@@ -173,9 +178,12 @@ def _apply_gesture(
 
     if gesture.name == "generate":
         if now - last_generate_time > 2.5:
-            generate_from_canvas(canvas, output_dir, export)
-            last_generate_time = now
-            status = f"Generated {output_dir / 'index.html'}"
+            try:
+                generate_from_canvas(canvas, output_dir, export)
+                last_generate_time = now
+                status = f"Generated {output_dir / 'index.html'}"
+            except GenerationError as exc:
+                status = _short_error(exc)
         else:
             status = "Generation cooling down."
         return None, status, last_generate_time, last_clear_time
@@ -211,3 +219,10 @@ def _compose_preview(frame: np.ndarray, canvas: np.ndarray, gesture: GestureStat
     if gesture.erase_point:
         cv2.circle(overlay, gesture.erase_point, ERASE_RADIUS, (70, 170, 255), 2, cv2.LINE_AA)
     return overlay
+
+
+def _short_error(exc: Exception) -> str:
+    first_line = str(exc).splitlines()[0]
+    if len(first_line) > 92:
+        return first_line[:89] + "..."
+    return first_line
