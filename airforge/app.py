@@ -201,7 +201,7 @@ def _compose_preview(frame: np.ndarray, canvas: np.ndarray, gesture: GestureStat
     for idx, line in enumerate(lines):
         cv2.putText(
             overlay,
-            line,
+            _overlay_text(line),
             (30, 46 + idx * 28),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.62,
@@ -216,6 +216,14 @@ def _compose_preview(frame: np.ndarray, canvas: np.ndarray, gesture: GestureStat
     if gesture.erase_point:
         cv2.circle(overlay, gesture.erase_point, ERASE_RADIUS, (70, 170, 255), 2, cv2.LINE_AA)
     return overlay
+
+
+def _overlay_text(value: object) -> str:
+    text = str(value).splitlines()[0]
+    text = text.encode("ascii", "replace").decode("ascii")
+    if len(text) > 96:
+        return text[:93] + "..."
+    return text
 
 
 @dataclass
