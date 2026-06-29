@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -29,7 +31,6 @@ def generate_page(
     sketch_path: Path | None = None,
 ) -> GeneratedFiles:
     output_dir.mkdir(parents=True, exist_ok=True)
-    _require_codex_cli()
 
     html_path = output_dir / "index.html"
     react_path = output_dir / "LandingPage.jsx" if export == "react" else None
@@ -39,6 +40,36 @@ def generate_page(
     _remove_stale_outputs(html_path, react_path)
     prompt_path.write_text(_prompt_payload(layout, export), encoding="utf-8")
 
+    command = _codex_command(output_dir, result_path, sketch_path)
+    prompt = _codex_prompt(export)
+
+    completed = _run_codex(command, output_dir, prompt)
+    if completed.returncode != 0:
+        raise GenerationError(_format_codex_failure(completed))
+
+    _validate_generated_file(html_path, "index.html")
+    if react_path is not None:
+        _validate_generated_file(react_path, "LandingPage.jsx")
+
+    return GeneratedFiles(html_path=html_path, react_path=react_path)
+
+
+def _codex_command(output_dir: Path, result_path: Path, sketch_path: Path | None) -> list[str]:
+    codex_path = shutil.which("codex")
+    if codex_path is not None:
+        return _local_codex_command(output_dir, result_path, sketch_path)
+
+    wsl_path = shutil.which("wsl.exe")
+    if os.name == "nt" and wsl_path is not None:
+        return _wsl_codex_command(output_dir, result_path, sketch_path)
+
+    raise GenerationError(
+        "Codex CLI is required for AI generation. `codex` was not found on PATH, "
+        "and WSL fallback is only available on Windows with `wsl.exe`."
+    )
+
+
+def _local_codex_command(output_dir: Path, result_path: Path, sketch_path: Path | None) -> list[str]:
     command = [
         "codex",
         "exec",
@@ -58,13 +89,40 @@ def generate_page(
             str(result_path),
         ]
     )
-    command.append(_codex_prompt(export))
+    command.append("-")
+    return command
 
+
+def _wsl_codex_command(output_dir: Path, result_path: Path, sketch_path: Path | None) -> list[str]:
+    codex_args = [
+        "codex",
+        "exec",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--ephemeral",
+        "--dangerously-bypass-approvals-and-sandbox",
+    ]
+    if sketch_path is not None and sketch_path.exists():
+        codex_args.extend(["--image", _to_wsl_path(sketch_path)])
+    codex_args.extend(
+        [
+            "--cd",
+            _to_wsl_path(output_dir),
+            "--skip-git-repo-check",
+            "--output-last-message",
+            _to_wsl_path(result_path),
+            "-",
+        ]
+    )
+    return ["wsl.exe", "bash", "-lc", " ".join(shlex.quote(arg) for arg in codex_args)]
+
+
+def _run_codex(command: list[str], output_dir: Path, prompt: str) -> subprocess.CompletedProcess[str]:
     try:
-        completed = subprocess.run(
+        return subprocess.run(
             command,
             cwd=output_dir,
-            input="",
+            input=prompt,
             text=True,
             capture_output=True,
             timeout=CODEX_TIMEOUT_SECONDS,
@@ -75,22 +133,15 @@ def generate_page(
             f"Codex generation timed out after {CODEX_TIMEOUT_SECONDS} seconds. "
             "Try a simpler sketch or run again."
         ) from exc
-    if completed.returncode != 0:
-        raise GenerationError(_format_codex_failure(completed))
-
-    _validate_generated_file(html_path, "index.html")
-    if react_path is not None:
-        _validate_generated_file(react_path, "LandingPage.jsx")
-
-    return GeneratedFiles(html_path=html_path, react_path=react_path)
 
 
-def _require_codex_cli() -> None:
-    if shutil.which("codex") is None:
-        raise GenerationError(
-            "Codex CLI is required for AI generation, but `codex` was not found on PATH. "
-            "Install or log in to Codex CLI, then run AirForge again."
-        )
+def _to_wsl_path(path: Path) -> str:
+    path = path.resolve()
+    drive = path.drive.rstrip(":").lower()
+    if not drive:
+        return str(path).replace("\\", "/")
+    parts = [part for part in path.parts[1:]]
+    return "/mnt/" + drive + "/" + "/".join(parts)
 
 
 def _remove_stale_outputs(html_path: Path, react_path: Path | None) -> None:

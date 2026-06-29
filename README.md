@@ -6,6 +6,8 @@ Use your index finger to draw rectangles and lines on a webcam canvas. AirForge 
 
 No separate API key is required if Codex CLI is already installed and logged in on your machine.
 
+On Windows, AirForge uses the Windows webcam runtime. If `codex` is not installed in PowerShell but is available in Ubuntu/WSL, AirForge automatically calls Codex through `wsl.exe` and writes the generated page back into the same `generated/` folder.
+
 ## Setup
 
 ```bash
