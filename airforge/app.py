@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import time
+import urllib.request
 import webbrowser
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
@@ -16,6 +18,7 @@ from .sketch import detect_shapes, interpret_layout, sample_canvas
 DRAW_COLOR = (255, 255, 255)
 ERASE_RADIUS = 28
 WINDOW_NAME = "AirForge"
+HAND_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
 
 
 def main() -> None:
@@ -50,7 +53,7 @@ def run_sample(output_dir: Path, export: str) -> None:
 
 def run_webcam(output_dir: Path, export: str, camera_index: int) -> None:
     try:
-        import mediapipe as mp
+        hand_tracker = _create_hand_tracker()
     except ImportError as exc:
         raise SystemExit("MediaPipe is required for webcam tracking. Run: pip install -r requirements.txt") from exc
 
@@ -71,14 +74,6 @@ def run_webcam(output_dir: Path, export: str, camera_index: int) -> None:
     last_clear_time = 0.0
     last_status = "Show your index finger to draw."
 
-    mp_hands = mp.solutions.hands
-    hands = mp_hands.Hands(
-        static_image_mode=False,
-        max_num_hands=1,
-        min_detection_confidence=0.65,
-        min_tracking_confidence=0.55,
-    )
-
     output_dir.mkdir(parents=True, exist_ok=True)
     cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
 
@@ -91,7 +86,7 @@ def run_webcam(output_dir: Path, export: str, camera_index: int) -> None:
 
             frame = cv2.flip(frame, 1)
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = hands.process(rgb)
+            results = hand_tracker.process(rgb)
 
             gesture = GestureState("idle", (0, 0))
             if results.multi_hand_landmarks:
@@ -129,7 +124,7 @@ def run_webcam(output_dir: Path, export: str, camera_index: int) -> None:
                 cv2.imwrite(str(output_dir / "sketch.png"), canvas)
                 last_status = f"Saved {output_dir / 'sketch.png'}"
     finally:
-        hands.close()
+        hand_tracker.close()
         cap.release()
         cv2.destroyAllWindows()
 
@@ -219,6 +214,84 @@ def _compose_preview(frame: np.ndarray, canvas: np.ndarray, gesture: GestureStat
     if gesture.erase_point:
         cv2.circle(overlay, gesture.erase_point, ERASE_RADIUS, (70, 170, 255), 2, cv2.LINE_AA)
     return overlay
+
+
+@dataclass
+class _HandResults:
+    multi_hand_landmarks: list
+
+
+class _SolutionsHandTracker:
+    def __init__(self, hands_module) -> None:
+        self._hands = hands_module.Hands(
+            static_image_mode=False,
+            max_num_hands=1,
+            min_detection_confidence=0.65,
+            min_tracking_confidence=0.55,
+        )
+
+    def process(self, rgb: np.ndarray):
+        return self._hands.process(rgb)
+
+    def close(self) -> None:
+        self._hands.close()
+
+
+class _TasksHandTracker:
+    def __init__(self) -> None:
+        import mediapipe as mp
+        from mediapipe.tasks import python
+        from mediapipe.tasks.python import vision
+
+        model_path = _ensure_hand_model()
+        options = vision.HandLandmarkerOptions(
+            base_options=python.BaseOptions(model_asset_path=str(model_path)),
+            running_mode=vision.RunningMode.VIDEO,
+            num_hands=1,
+            min_hand_detection_confidence=0.65,
+            min_hand_presence_confidence=0.55,
+            min_tracking_confidence=0.55,
+        )
+        self._mp = mp
+        self._landmarker = vision.HandLandmarker.create_from_options(options)
+
+    def process(self, rgb: np.ndarray) -> _HandResults:
+        image = self._mp.Image(
+            image_format=self._mp.ImageFormat.SRGB,
+            data=np.ascontiguousarray(rgb),
+        )
+        result = self._landmarker.detect_for_video(image, int(time.monotonic() * 1000))
+        return _HandResults(multi_hand_landmarks=result.hand_landmarks)
+
+    def close(self) -> None:
+        self._landmarker.close()
+
+
+def _create_hand_tracker():
+    import mediapipe as mp
+
+    solutions = getattr(mp, "solutions", None)
+    if solutions is not None and hasattr(solutions, "hands"):
+        return _SolutionsHandTracker(solutions.hands)
+
+    return _TasksHandTracker()
+
+
+def _ensure_hand_model() -> Path:
+    model_dir = Path.home() / ".airforge"
+    model_path = model_dir / "hand_landmarker.task"
+    if model_path.exists() and model_path.stat().st_size > 0:
+        return model_path
+
+    model_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        urllib.request.urlretrieve(HAND_MODEL_URL, model_path)
+    except Exception as exc:
+        raise SystemExit(
+            "MediaPipe Tasks needs the hand landmarker model. "
+            f"Could not download it from {HAND_MODEL_URL}: {exc}"
+        ) from exc
+    return model_path
 
 
 def _short_error(exc: Exception) -> str:

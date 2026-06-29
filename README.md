@@ -53,6 +53,8 @@ Gesture controls:
 - `s`: save a debug snapshot to `generated/sketch.png`
 - `q` or `Esc`: quit
 
+With newer MediaPipe versions, the first webcam launch downloads the hand landmarker model into `~/.airforge/hand_landmarker.task`.
+
 ## Quick generator test without a webcam
 
 ```bash

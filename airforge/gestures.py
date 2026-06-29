@@ -48,9 +48,10 @@ class HandGestureDetector:
 
     @staticmethod
     def _points(landmarks, width: int, height: int) -> Dict[int, Point]:
+        landmark_list = landmarks.landmark if hasattr(landmarks, "landmark") else landmarks
         return {
             idx: (int(mark.x * width), int(mark.y * height))
-            for idx, mark in enumerate(landmarks.landmark)
+            for idx, mark in enumerate(landmark_list)
         }
 
     @staticmethod
