@@ -119,6 +119,7 @@ def run_webcam(output_dir: Path, export: str, camera_index: int) -> None:
                     generate_from_canvas(canvas, output_dir, export)
                     last_status = f"Generated {output_dir / 'index.html'}"
                 except GenerationError as exc:
+                    _print_generation_error(exc, output_dir)
                     last_status = _short_error(exc)
             if key == ord("s"):
                 cv2.imwrite(str(output_dir / "sketch.png"), canvas)
@@ -178,6 +179,7 @@ def _apply_gesture(
                 last_generate_time = now
                 status = f"Generated {output_dir / 'index.html'}"
             except GenerationError as exc:
+                _print_generation_error(exc, output_dir)
                 status = _short_error(exc)
         else:
             status = "Generation cooling down."
@@ -299,3 +301,9 @@ def _short_error(exc: Exception) -> str:
     if len(first_line) > 92:
         return first_line[:89] + "..."
     return first_line
+
+
+def _print_generation_error(exc: Exception, output_dir: Path) -> None:
+    print("\nAirForge generation failed:")
+    print(str(exc))
+    print(f"Check {output_dir / 'codex-error.txt'} and {output_dir / 'codex-result.txt'} for details.\n")

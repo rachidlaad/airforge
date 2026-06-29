@@ -36,8 +36,10 @@ def generate_page(
     react_path = output_dir / "LandingPage.jsx" if export == "react" else None
     prompt_path = output_dir / "airforge-prompt.json"
     result_path = output_dir / "codex-result.txt"
+    error_path = output_dir / "codex-error.txt"
 
     _remove_stale_outputs(html_path, react_path)
+    _remove_stale_outputs(error_path, None)
     prompt_path.write_text(_prompt_payload(layout, export), encoding="utf-8")
 
     command = _codex_command(output_dir, result_path, sketch_path)
@@ -45,6 +47,7 @@ def generate_page(
 
     completed = _run_codex(command, output_dir, prompt)
     if completed.returncode != 0:
+        error_path.write_text(_format_codex_failure(completed), encoding="utf-8")
         raise GenerationError(_format_codex_failure(completed))
 
     _validate_generated_file(html_path, "index.html")
@@ -94,11 +97,10 @@ def _local_codex_command(output_dir: Path, result_path: Path, sketch_path: Path 
 
 
 def _wsl_codex_command(output_dir: Path, result_path: Path, sketch_path: Path | None) -> list[str]:
+    codex_binary = _wsl_codex_binary(output_dir)
     codex_args = [
-        "codex",
+        codex_binary,
         "exec",
-        "--ignore-user-config",
-        "--ignore-rules",
         "--ephemeral",
         "--dangerously-bypass-approvals-and-sandbox",
     ]
@@ -109,7 +111,7 @@ def _wsl_codex_command(output_dir: Path, result_path: Path, sketch_path: Path | 
             "--cd",
             _to_wsl_path(output_dir),
             "--skip-git-repo-check",
-            "--output-last-message",
+            "-o",
             _to_wsl_path(result_path),
             "-",
         ]
@@ -142,6 +144,33 @@ def _to_wsl_path(path: Path) -> str:
         return str(path).replace("\\", "/")
     parts = [part for part in path.parts[1:]]
     return "/mnt/" + drive + "/" + "/".join(parts)
+
+
+def _wsl_codex_binary(output_dir: Path) -> str:
+    codex_base = _wsl_codex_base(output_dir)
+    if codex_base is not None and codex_base.exists():
+        candidates = [path for path in codex_base.glob("*/codex") if path.is_file()]
+        top_level = codex_base / "codex"
+        if top_level.is_file():
+            candidates.append(top_level)
+        if candidates:
+            newest = max(candidates, key=lambda path: path.stat().st_mtime)
+            return _to_wsl_path(newest)
+    return "codex"
+
+
+def _wsl_codex_base(output_dir: Path) -> Path | None:
+    resolved = output_dir.resolve()
+    parts = resolved.parts
+    if resolved.drive and len(parts) >= 3 and parts[1] == "Users":
+        return Path(resolved.drive + "\\") / "Users" / parts[2] / ".codex" / "bin" / "wsl"
+
+    wsl_output = _to_wsl_path(output_dir)
+    wsl_parts = wsl_output.split("/")
+    if len(wsl_parts) >= 5 and wsl_parts[1] == "mnt" and wsl_parts[3] == "Users":
+        return Path("/".join(wsl_parts[:5])) / ".codex" / "bin" / "wsl"
+
+    return None
 
 
 def _remove_stale_outputs(html_path: Path, react_path: Path | None) -> None:
